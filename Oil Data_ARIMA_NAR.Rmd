@@ -1,0 +1,435 @@
+---
+title: <h1>ARIMA and NAR MODELS for BRENT OIL PRICE PREDICTION</h1><br>
+date: <h4>December 26, 2018</h4><br>
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: TRUE
+    #code_folding: "hide"
+---
+
+<br>
+
+# INTRODUCTION
+
+In this paper, we will analyse oil prices and try to build a successfull model by using ARIMA and NAR methods.  
+
+Necessary libraries for further analysis. Please be sure about installing the packages.
+```{r message=FALSE, warning=FALSE}
+library(Quandl)
+library(readr)
+library(readxl)
+library(FitAR)
+library(tseries)
+library(forecast)
+library(TSA)
+library(fGarch)
+library(astsa)
+library(nnet)
+library(pastecs)
+library(moments)
+library(ggplot2)
+library(tsDyn)
+```
+
+
+Loading data and converting into ts format. ts format contains only one column, which is 'Price' of oil dataframe.
+```{r message=FALSE, warning=FALSE}
+oil = read_excel("BrentOil.xlsx",col_types = c("date", "numeric"))
+View(oil)
+
+oil.ts = as.ts(oil$Price)
+head(oil.ts)
+```
+
+
+Let's see data data in a chart:
+```{r message=FALSE, warning=FALSE}
+plot(oil, xlab="Year", ylab="Price, $", type="l")
+lines(lowess(oil), col="red", lty="dashed")
+```
+
+
+We first attempt to see if a log transformation is recommended by plotting the Box-Cox log likelihood graphs.
+
+BoxCox plots to show the need of log transformation
+```{r message=FALSE, warning=FALSE}
+BoxCox.ts(oil.ts)
+```
+
+Since estimated parameter lambda did not take the value of zero in its 95% confidence interval, we will not transform our data with 'log' operator.
+     
+First, we apply Dickey-Fuller stationarity test:
+```{r message=FALSE, warning=FALSE}
+adf.test(oil.ts, alternative=c('stationary'))
+```
+
+Since p-value is greater than critical point, we do not reject the null hypothesis which claims that our time serie is non-stationary
+
+# ARIMA Models
+
+## DECIDE PARAMATERS 'p', 'd' and 'q' in ARIMA(p,d,q)
+
+```{r message=FALSE, warning=FALSE}
+library(ggplot2)
+ggAcf(oil.ts) +
+  ggtitle("Auto Correlation Function Oil Daily")
+ggPacf(oil.ts) +
+  ggtitle("Partial Auto Correlation Function Oil Daily")
+```
+
+PACF graph tell us that the spikes exist in ACF graph caused by the lag 1.
+
+Let's take one lag differences of the series
+```{r message=FALSE, warning=FALSE}
+ggAcf(diff(oil.ts,1)) +
+  ggtitle("Auto Correlation Function Oil Daily")
+```
+
+Now it seems that there is no spike that crashing our Autocorrelation bounderies
+
+Now perform an (Augmented) Dickey-Fuller Test. It is a test to see if a time series has a unit root. If it does, the series is considered non-stationary. The null hypothesis here is that the time series is non-stationary.
+ 
+```{r message=FALSE, warning=FALSE}
+adf.test(diff(oil.ts,1), alternative=c('stationary')) 
+```
+
+Since the p-value is less than critical point (0,05), we reject null hypothesisand conclude that our new 1-lag-difference serie is stationary!
+
+So we need to use ARIMA(0,1,?)
+
+Plotting the variable that is clarified from its 1-lag relation...
+```{r message=FALSE, warning=FALSE}
+plot(diff(oil.ts,1), xlab="Year", ylab="Price, $", type="l")
+```
+
+Writing a function to compute AIC of various ARMA orders
+```{r message=FALSE, warning=FALSE}
+AICfn<-function(N,K)
+{
+  for(i in 0:N)
+  {for(j in 0:N)
+  {
+    print(AIC(arima(K,order=c(i,1,j))))
+  }}}
+
+AICfn(2,oil.ts)
+```
+
+ARIMA(0,1,1) model brings the minimum AIC...ARIMA(1,1,0) has the second lowest AIC...
+
+We should take prediction performances into account while deciding best ARMA model parameters
+
+
+## Validation of the model 
+
+We will do it by selection with 'auto.arima()' built-in function in R:
+```{r message=FALSE, warning=FALSE}
+h <- 5
+fit.arima <- auto.arima(oil.ts[1:2578], max.order = TRUE)
+fit.arima
+```
+
+Fitted model by auto.arima is ARIMA(1,1,1)
+
+We will compare all there arima models' results
+
+**Models determined**
+
+```{r message=FALSE, warning=FALSE}
+model1<-arima(oil.ts[1:2578],order=c(0,1,1),include.mean=FALSE)
+model2<-arima(oil.ts[1:2578],order=c(1,1,0),include.mean=FALSE)
+model3<-arima(oil.ts[1:2578],order=c(1,1,1),include.mean=FALSE)
+```
+
+**Residual analysis**
+
+```{r message=FALSE, warning=FALSE}
+plot(model1$resid);abline(h=0)
+plot(model2$resid);abline(h=0)
+plot(model3$resid);abline(h=0)
+mean(model1$resid); mean(model2$resid); mean(model3$resid)
+```
+
+**Residual ACF and PACF plots**
+
+```{r message=FALSE, warning=FALSE}
+acf(as.vector(model1$resid),drop.lag.0=FALSE)
+acf(as.vector(model2$resid),drop.lag.0=FALSE)
+acf(as.vector(model3$resid),drop.lag.0=FALSE)
+
+pacf(as.vector(model1$resid))
+pacf(as.vector(model2$resid))
+pacf(as.vector(model3$resid))
+```
+
+As expected, there is no significant autocorrelation for the residuals across any lag in either model.
+
+**Normality tests**
+
+```{r message=FALSE, warning=FALSE}
+qqnorm(residuals(model1)); qqline(residuals(model1))
+qqnorm(residuals(model2)); qqline(residuals(model2))
+qqnorm(residuals(model3)); qqline(residuals(model3))
+jarque.bera.test(model1$resid); jarque.bera.test(model2$resid); jarque.bera.test(model3$resid)
+```
+
+The normal QQ-plots suggest mild evidence of normality for all models. The Jarque-Bera test suggests a p-value of 2.2e-16 for all models. So we  reject the null hypothesis and conclude that our residuals are not Normally distributed
+
+### Independence tests
+
+**McLeod, A. I. and W. K. Li (1983).**
+
+**Diagnostic checking ARMA time series models using squared residual autocorrelations**
+
+```{r message=FALSE, warning=FALSE}
+library(TSA)
+McLeod.Li.test(,model1$resid,gof.lag=20)
+McLeod.Li.test(,model2$resid,gof.lag=20)
+McLeod.Li.test(,model3$resid,gof.lag=20)
+```
+
+McLeod-Li test suggests a strong evidence that the residuals for all models are autocorrelated. The plots of the p-values against different lags indicate that all p-values lie below the 0.05 threshold. 
+
+Therefore, a GARCH model may be appropriate to fit the data. The intuitive rationale behind that is possibly linked to the fact that the financial crisis has brought in some significant effects of volatility clustering.
+
+**Write a function to compute AICs of various GARCH orders**
+
+```{r message=FALSE, warning=FALSE}
+AICfn2<-function(N,K)
+{
+  for(i in 1:(N+1))
+  { for(j in 1:N)
+  {
+    print(AIC(garch(residuals(K),order=c(i,j-1),trace=FALSE)))
+  }}}
+
+AICfn2(3,model1)
+AICfn2(3,model2)
+AICfn2(3,model3)
+```
+
+GARCH(1,1) gives minimum AIC score for
+model1 (ARIMA(0,1,1)),
+model2 (ARIMA(1,1,0)) and
+model3 (ARIMA(1,1,1))
+
+**GARCH model fitted**
+
+```{r message=FALSE, warning=FALSE}
+model1.garch<-garch(model1$resid,order=c(1,1),trace=F)
+model2.garch<-garch(model2$resid,order=c(1,1),trace=F)
+model3.garch<-garch(model3$resid,order=c(1,1),trace=F)
+
+model1.garch.res<-resid(model1.garch)[-1]
+model2.garch.res<-resid(model2.garch)[-1]
+model3.garch.res<-resid(model3.garch)[-1]
+
+acf(model1.garch.res,drop.lag.0=FALSE, na.action = na.pass)
+acf(model2.garch.res,drop.lag.0=FALSE, na.action = na.pass)
+acf(model3.garch.res,drop.lag.0=FALSE, na.action = na.pass)
+
+pacf(model1.garch.res, na.action = na.pass)
+pacf(model2.garch.res, na.action = na.pass)
+pacf(model3.garch.res, na.action = na.pass)
+```
+
+For comparison purpose, we have also included an APARCH(1,2) fit to the residuals. We will evaluate their forecasting powers later.
+
+**For comparing forecast accuracy, fit GARCH/APARCH models**
+
+```{r message=FALSE, warning=FALSE}
+library(fGarch)
+gfit11<-garchFit(formula=~arma(0,1)+garch(1,1),
+                data=oil.ts[1:2578],trace=FALSE,include.mean=FALSE)
+gfit12<-garchFit(formula=~arma(0,1)+aparch(1,1),
+                 data=oil.ts[1:2578],trace=FALSE,include.mean=FALSE)
+gfit21<-garchFit(formula=~arma(1,0)+garch(1,1),
+                data=oil.ts[1:2578],trace=FALSE,include.mean=FALSE)#, hessian = 'rcd')
+gfit22<-garchFit(formula=~arma(1,0)+aparch(1,1),
+                 data=oil.ts[1:2578],trace=FALSE,include.mean=FALSE)
+gfit31<-garchFit(formula=~arma(1,1)+garch(1,1),
+                 data=oil.ts[1:2578],trace=FALSE,include.mean=FALSE)#, hessian = 'rcd')# OR use cond.dist = "QMLE"
+gfit32<-garchFit(formula=~arma(1,1)+aparch(1,1),
+                 data=oil.ts[1:2578],trace=FALSE,include.mean=FALSE)
+```
+
+We used 'hessian' parameter as default for 'garchfit.predict' method which is denoting how the Hessian matrix should be evaluated. But optimization of likelihood brings coefficient of GARCH model which are NaN, since the optimization will not converge and the diagonal elements in Hessian Matrix finalized as 'negative' which causes an infinite standard errors! (taking sqrt of nagative brings irrationality) covariance matrix should be positive definite !!!
+
+We should deep dive into garchfit() method and optim() method in order to manage convergence. So, since GARCH models are beyond the limitations of our scope, we leave them at this point
+
+https://ntguardian.wordpress.com/2017/11/02/problems-estimating-garch-parameters-r/
+
+http://r.789695.n4.nabble.com/Problem-with-garchFit-function-in-fSeries-td803321.html
+
+https://www.rdocumentation.org/packages/fGarch/versions/3042.83/topics/garchFit
+
+https://people.duke.edu/~rnau/411arim3.htm
+
+**Omitted GARCH Models are:**
+
+forecast.error11[i]<-mean(abs(predict(gfit11,n.ahead=i)$meanForecast-oil.ts[(2579:(2578+i))]));
+
+forecast.error12[i]<-mean(abs(predict(gfit12,n.ahead=i)$meanForecast-oil.ts[(2579:(2578+i))]));
+
+forecast.error21[i]<-mean(abs(predict(gfit21,n.ahead=i)$meanForecast-oil.ts[(2579:(2578+i))])); predict(gfit21,n.ahead=i,cond.dist = "QMLE")
+
+forecast.error22[i]<-mean(abs(predict(gfit22,n.ahead=i)$meanForecast-oil.ts[(2579:(2578+i))]));
+
+forecast.error31[i]<-mean(abs(predict(gfit21,n.ahead=i)$meanForecast-oil.ts[(2579:(2578+i))]));
+
+forecast.error32[i]<-mean(abs(predict(gfit22,n.ahead=i)$meanForecast-oil.ts[(2579:(2578+i))]));
+
+## Forecasting
+
+We continue with ARIMA type models and omit GARCH components by assuming that the residuals are not autocorrelated, though the McLeod-Li test indicates a strong evidence that the residuals are autocorrelated.  
+
+```{r message=FALSE, warning=FALSE}
+forecast.error41 <- vector(length=5)
+forecast.error42 <- vector(length=5)
+forecast.error43 <- vector(length=5)
+
+for(i in 1:5)
+  
+{
+  forecast.error41[i]<-mean(abs(forecast(Arima(oil.ts[1:2578],
+                                             order=c(1,1,0),include.mean=FALSE),
+                                       h=5)$mean-oil.ts[(2579:(2578+i))]));
+forecast.error42[i]<-mean(abs(forecast(Arima(oil.ts[1:2578],
+                                             order=c(0,1,1),include.mean=FALSE),
+                                       h=5)$mean-oil.ts[(2579:(2578+i))]));
+forecast.error43[i]<-mean(abs(forecast(Arima(oil.ts[1:2578],
+                                             order=c(1,1,1),include.mean=FALSE),
+                                       h=5)$mean-oil.ts[(2579:(2578+i))]))
+}
+
+forecast.error41
+forecast.error42
+forecast.error43
+```
+
+**Compute MAE**
+
+```{r message=FALSE, warning=FALSE}
+mean(abs(forecast.error41))
+mean(abs(forecast.error42))
+mean(abs(forecast.error43))
+```
+
+So our MAE values are about 1. It is not bad. Let's see if we can develop it by NAR models.
+
+
+# NAR Models
+
+Now, we will try NAR methods to predict oil prices. 
+
+**Statistics about data**
+
+```{r message=FALSE, warning=FALSE}
+des_oil.ts = stat.desc(oil.ts) 
+des_oil.ts
+```
+
+**Skewness**
+
+```{r message=FALSE, warning=FALSE}
+s_oil.ts = skewness(oil.ts)
+s_oil.ts
+```
+
+**Excess kurtosis**
+
+```{r message=FALSE, warning=FALSE}
+k_oil.ts<-kurtosis(oil.ts)
+k_oil.ts
+```
+
+We've done analysis like stationarity above, so we won't repeat them here. We'll advance directly to NAR Models. 
+**Splitting dataset into train and test**
+
+```{r message=FALSE, warning=FALSE}
+oiltrain = oil.ts[1:2578]
+oiltest = oil.ts[2579:2583] #We take last 5 observations as test (h)
+```
+
+We will use 2 models in two different packages
+
+## Model-1
+
+**Fit NN with 20 nodes, d=1 for stationarity**
+
+```{r}
+fit.nn <- nnetar(y = oiltrain, d =1, size= 20)
+fcast.nn <- forecast(fit.nn, h=5) # forecast 5 days
+```
+
+**Predicted Values**
+
+```{r message=FALSE, warning=FALSE}
+fcast.nn
+```
+
+**Summary of the model**
+
+```{r message=FALSE, warning=FALSE}
+summary(fcast.nn)
+```
+
+**Let's see real and predicted values in one table**
+
+```{r message=FALSE, warning=FALSE}
+nntable = cbind(oiltest, fcast.nn$mean)
+nntable
+```
+
+**And it is time for results for our first model**
+
+```{r message=FALSE, warning=FALSE}
+MAPE_nn = mean(abs(oiltest-fcast.nn$mean)/oiltest)
+MAPE_nn
+
+MAE_nn = mean(abs(oiltest-fcast.nn$mean))
+MAE_nn
+```
+
+We've obtained a MAE score of 0,74. So, it seems we can develop our results. It is a very good score.
+
+Lets try a different library.
+
+## Model-2
+
+**Training the model and fitting it.**
+
+```{r message=FALSE, warning=FALSE}
+fit.nnet = nnetTs(oiltrain,d =1, m = 3, size = 20) 
+summary(fit.nnet)
+fcast.nnet = forecast(object = oiltrain, h=5)
+summary(fcast.nnet)
+```
+
+**Real values vs. predicted values**
+
+```{r message=FALSE, warning=FALSE}
+
+nntable = cbind(oiltest, fcast.nnet$mean)
+nntable
+```
+
+**And the results:**
+
+```{r message=FALSE, warning=FALSE}
+MAPE_nnet = mean(abs(oiltest-fcast.nnet$mean)/oiltest)
+MAPE_nnet
+
+MAE_nnet = mean(abs(oiltest-fcast.nnet$mean))
+MAE_nnet
+```
+
+This model too, has a very good score in predicting. But, our first NN model takes the lead in this study.
+
+
+
+
+
+
